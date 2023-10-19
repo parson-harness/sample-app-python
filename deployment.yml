@@ -1,19 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: sample-app-python
+  name: <+service.name>
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: sample-app-python
+      app: <+service.name>
   template:
     metadata:
       labels:
-        app: sample-app-python
+        app: <+service.name>
     spec:
       containers:
-        - name: sample-app-python
-          image: parsontodd/sample-app-python:latest
+        - name: <+service.name>
+          image: <+artifacts.primary.imagePath>:<+artifacts.primary.tag>
           ports:
             - containerPort: 8080
