@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app-python
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sample-app-python
+  template:
+    metadata:
+      labels:
+        app: sample-app-python
+    spec:
+      containers:
+        - name: sample-app-python
+          image: sample-app-python:latest
+          ports:
+            - containerPort: 5000
