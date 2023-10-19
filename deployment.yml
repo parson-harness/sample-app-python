@@ -1,19 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: <+service.name>
+  name: {{.Values.name}}-deployment
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: <+service.name>
+      app: {{.Values.name}}
   template:
     metadata:
       labels:
-        app: <+service.name>
+        app: {{.Values.name}}
     spec:
       containers:
-        - name: <+service.name>
-          image: <+artifacts.primary.imagePath>:<+artifacts.primary.tag>
+        - name: {{.Values.name}}
+          image: {{.Values.image}}
           ports:
             - containerPort: 8080
