@@ -1,0 +1,31 @@
+inputSet:
+  name: test input set
+  identifier: test_input_set
+  orgIdentifier: default
+  projectIdentifier: parson
+  pipeline:
+    identifier: DevSecOps
+    properties:
+      ci:
+        codebase:
+          build:
+            type: branch
+            spec:
+              branch: <+trigger.branch>
+    stages:
+      - stage:
+          identifier: Deploy_to_Staging
+          type: Deployment
+          spec:
+            service:
+              serviceInputs:
+                serviceDefinition:
+                  type: Kubernetes
+                  spec:
+                    artifacts:
+                      primary:
+                        primaryArtifactRef: pythonapp
+    variables:
+      - name: debug
+        type: String
+        value: "false"
