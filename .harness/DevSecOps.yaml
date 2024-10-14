@@ -1,0 +1,358 @@
+pipeline:
+  name: DevSecOps
+  identifier: DevSecOps
+  projectIdentifier: parson
+  orgIdentifier: default
+  tags: {}
+  properties:
+    ci:
+      codebase:
+        connectorRef: parsongh
+        repoName: sample-app-python
+        build: <+input>
+  stages:
+    - stage:
+        name: Build Test Push
+        identifier: Build_Test_Push
+        type: CI
+        spec:
+          cloneCodebase: true
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: YAML Lint
+                  identifier: YAML_Lint
+                  spec:
+                    connectorRef: parsondockerhub
+                    image: cytopia/yamllint
+                    shell: Sh
+                    command: |-
+                      cat > .yamllint <<EOL 
+                      extends: relaxed
+
+                      rules:
+                        new-line-at-end-of-file: disable  # don't bother me with this rule
+                      EOL
+                      cat .yamllint
+                      ls -lat
+                      yamllint -c .yamllint .
+                      ls -lat
+              - step:
+                  type: Gitleaks
+                  name: Gitleaks
+                  identifier: Gitleaks
+                  spec:
+                    mode: orchestration
+                    config: default
+                    target:
+                      name: <+pipeline.properties.ci.codebase.repoName>
+                      type: repository
+                      variant: "1.0"
+                    advanced:
+                      log:
+                        level: info
+                  when:
+                    stageStatus: Success
+              - step:
+                  type: Run
+                  name: Build app
+                  identifier: Run_1
+                  spec:
+                    shell: Sh
+                    command: pip install -r requirements.txt
+                  when:
+                    stageStatus: Success
+              - stepGroup:
+                  name: SCA and SAST Scans
+                  identifier: SCA_and_SAST_Scans
+                  steps:
+                    - parallel:
+                        - step:
+                            type: Owasp
+                            name: OWASP SCA Scan
+                            identifier: OWASP_SCA_Scan
+                            spec:
+                              mode: orchestration
+                              config: default
+                              target:
+                                name: <+pipeline.properties.ci.codebase.repoName>
+                                type: repository
+                                variant: "1.0"
+                              advanced:
+                                log:
+                                  level: info
+                            when:
+                              stageStatus: Success
+                        - stepGroup:
+                            name: Semgrep
+                            identifier: Semgrep
+                            steps:
+                              - step:
+                                  type: Run
+                                  name: Semgrep SAST Scan
+                                  identifier: Semgrep_SAST_Scan
+                                  spec:
+                                    connectorRef: parsondockerhub
+                                    image: returntocorp/semgrep
+                                    shell: Sh
+                                    command: semgrep --sarif --config auto -o /tmp/semgrep_results.sarif /harness
+                                  when:
+                                    stageStatus: Success
+                              - step:
+                                  type: Semgrep
+                                  name: Semgrep Ingestion
+                                  identifier: Semgrep_Ingestion
+                                  spec:
+                                    mode: ingestion
+                                    config: default
+                                    target:
+                                      name: <+pipeline.properties.ci.codebase.repoName>
+                                      type: repository
+                                      variant: "1.0"
+                                    advanced:
+                                      log:
+                                        level: info
+                                    ingestion:
+                                      file: /tmp/semgrep_results.sarif
+                                  when:
+                                    stageStatus: Success
+              - step:
+                  type: BuildAndPushDockerRegistry
+                  name: Build Docker Container and Push to Dockerhub
+                  identifier: BuildAndPushDockerRegistry_1
+                  spec:
+                    connectorRef: parsondockerhub
+                    repo: parsontodd/sample-app-python
+                    tags:
+                      - <+pipeline.sequenceId>
+                  when:
+                    stageStatus: Success
+              - step:
+                  type: AquaTrivy
+                  name: Trivy Scan
+                  identifier: AquaTrivy_1
+                  spec:
+                    mode: orchestration
+                    config: default
+                    target:
+                      name: <+pipeline.properties.ci.codebase.repoName>
+                      type: container
+                      variant: "1.0"
+                    advanced:
+                      log:
+                        level: info
+                      fail_on_severity: none
+                      args:
+                        cli: "--scanners vuln,secret,config,license,secret --severity 'HIGH,CRITICAL' --license-full"
+                    privileged: true
+                    image:
+                      type: docker_v2
+                      name: <+pipeline.stages.Build_Test_Push.spec.execution.steps.BuildAndPushDockerRegistry_1.artifact_BuildAndPushDockerRegistry_1.stepArtifacts.publishedImageArtifacts[0].imageName>
+                      access_id: parsontodd
+                      access_token: <+secrets.getValue("project.parsondockerhubsesandbox")>
+                      tag: <+pipeline.stages.Build_Test_Push.spec.execution.steps.BuildAndPushDockerRegistry_1.artifact_BuildAndPushDockerRegistry_1.stepArtifacts.publishedImageArtifacts[0].tag>
+                  when:
+                    stageStatus: Success
+              - step:
+                  type: Run
+                  name: Generate SBOM
+                  identifier: Generate_SBOM
+                  spec:
+                    connectorRef: parsondockerhub
+                    image: aquasec/trivy
+                    shell: Sh
+                    command: |-
+                      ls -la /tmp
+                      trivy config /harness/  --severity 'HIGH,CRITICAL' --format json -o /tmp/config.json
+                      ls -la /tmp
+                      cat /tmp/config.json
+                      trivy image <+pipeline.stages.Build_Test_Push.spec.execution.steps.BuildAndPushDockerRegistry_1.artifact_BuildAndPushDockerRegistry_1.stepArtifacts.publishedImageArtifacts[0].imageName>:<+pipeline.stages.Build_Test_Push.spec.execution.steps.BuildAndPushDockerRegistry_1.artifact_BuildAndPushDockerRegistry_1.stepArtifacts.publishedImageArtifacts[0].tag> --scanners vuln,secret,config,license,secret --severity 'HIGH,CRITICAL' --license-full --format cyclonedx --output /tmp/sbom.cyclonedx
+                      ls -la /tmp
+              - step:
+                  type: SscaOrchestration
+                  name: SSCA Orchestration
+                  identifier: SSCA_Orchestration
+                  spec:
+                    mode: ingestion
+                    ingestion:
+                      file: /tmp/sbom.cyclonedx
+                    tool:
+                      type: Syft
+                      spec:
+                        format: spdx-json
+                    source:
+                      type: image
+                      spec:
+                        connector: parsondockerhub
+                        image: <+pipeline.stages.Build_Test_Push.spec.execution.steps.BuildAndPushDockerRegistry_1.artifact_BuildAndPushDockerRegistry_1.stepArtifacts.publishedImageArtifacts[0].imageName>:<+pipeline.stages.Build_Test_Push.spec.execution.steps.BuildAndPushDockerRegistry_1.artifact_BuildAndPushDockerRegistry_1.stepArtifacts.publishedImageArtifacts[0].tag>
+                    attestation:
+                      type: cosign
+                      spec:
+                        privateKey: parson-cosign-key
+                        password: parson-cosign-pw
+                    resources:
+                      limits:
+                        memory: 500Mi
+                        cpu: "0.5"
+          slsa_provenance:
+            enabled: false
+          sharedPaths:
+            - /tmp
+          caching:
+            enabled: false
+            paths: []
+        when:
+          pipelineStatus: Success
+          condition: <+pipeline.variables.debug> == "false"
+    - stage:
+        name: Deploy to Staging
+        identifier: Deploy_to_Staging
+        description: ""
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            serviceRef: parsonsampleapppython
+            serviceInputs:
+              serviceDefinition:
+                type: Kubernetes
+                spec:
+                  artifacts:
+                    primary:
+                      primaryArtifactRef: <+input>
+                      sources: <+input>
+          environment:
+            environmentRef: parsonmacnonprod
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: parsonmacnonprod
+          execution:
+            steps:
+              - step:
+                  type: Policy
+                  name: Check for any critical vulns
+                  identifier: Check_for_any_critical_vulns
+                  spec:
+                    policySets:
+                      - Any_Criticals
+                    type: Custom
+                    policySpec:
+                      payload: "{\"AQUA_IMAGE_ANYCRITICAL\": <+pipeline.stages.Build_Test_Push.spec.execution.steps.AquaTrivy_1.output.outputVariables.CRITICAL>}"
+                  timeout: 10m
+              - step:
+                  name: Rollout Deployment
+                  identifier: rolloutDeployment
+                  type: K8sRollingDeploy
+                  timeout: 10m
+                  spec:
+                    skipDryRun: false
+                    pruningEnabled: false
+            rollbackSteps:
+              - step:
+                  name: Rollback Rollout Deployment
+                  identifier: rollbackRolloutDeployment
+                  type: K8sRollingRollback
+                  timeout: 10m
+                  spec:
+                    pruningEnabled: false
+        tags: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: StageRollback
+    - stage:
+        name: Deploy to Prod
+        identifier: Deploy_to_Prod
+        description: ""
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            useFromStage:
+              stage: Deploy_to_Staging
+          environment:
+            environmentRef: parsonmacprod
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: parsonmacprod
+          execution:
+            steps:
+              - step:
+                  type: Policy
+                  name: No New Critical Vulns
+                  identifier: No_New_Critical_Vulns
+                  spec:
+                    policySets:
+                      - No_New_Critical_Vulnerabilities
+                    type: Custom
+                    policySpec:
+                      payload: "{\"AQUA_IMAGE_NEWCRITICAL\": <+pipeline.stages.Build_Test_Push.spec.execution.steps.AquaTrivy_1.output.outputVariables.NEW_CRITICAL>}"
+                  timeout: 10m
+              - stepGroup:
+                  name: Canary Deployment
+                  identifier: canaryDepoyment
+                  steps:
+                    - step:
+                        name: Canary Deployment
+                        identifier: canaryDeployment
+                        type: K8sCanaryDeploy
+                        timeout: 10m
+                        spec:
+                          instanceSelection:
+                            type: Count
+                            spec:
+                              count: 1
+                          skipDryRun: false
+                    - step:
+                        name: Canary Delete
+                        identifier: canaryDelete
+                        type: K8sCanaryDelete
+                        timeout: 10m
+                        spec: {}
+              - stepGroup:
+                  name: Primary Deployment
+                  identifier: primaryDepoyment
+                  steps:
+                    - step:
+                        name: Rolling Deployment
+                        identifier: rollingDeployment
+                        type: K8sRollingDeploy
+                        timeout: 10m
+                        spec:
+                          skipDryRun: false
+            rollbackSteps:
+              - step:
+                  name: Canary Delete
+                  identifier: rollbackCanaryDelete
+                  type: K8sCanaryDelete
+                  timeout: 10m
+                  spec: {}
+              - step:
+                  name: Rolling Rollback
+                  identifier: rollingRollback
+                  type: K8sRollingRollback
+                  timeout: 10m
+                  spec: {}
+        tags: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: StageRollback
+  allowStageExecutions: true
+  variables:
+    - name: debug
+      type: String
+      description: ""
+      required: false
+      value: <+input>.default(false).allowedValues(true,false)
