@@ -1,5 +1,6 @@
 inputSet:
   name: test input set
+  tags: {}
   identifier: test_input_set
   orgIdentifier: default
   projectIdentifier: parson
@@ -25,6 +26,7 @@ inputSet:
                     artifacts:
                       primary:
                         primaryArtifactRef: pythonapp
+                        sources: <+input>
     variables:
       - name: debug
         type: String
